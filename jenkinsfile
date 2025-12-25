@@ -3,107 +3,133 @@ pipeline {
 
     tools {
         jdk 'jdk17'
-        nodejs 'node20'   // ✅ Node.js 20 LTS
+        nodejs 'node20'
     }
 
     environment {
         SCANNER_HOME = tool 'sonar-scanner'
+        IMAGE_NAME   = 'sandeepallakonda/swiggy'
+        IMAGE_TAG    = 'latest'
+
+        AWS_REGION   = 'us-east-1'
+        EKS_CLUSTER  = 'YOUR_EKS_CLUSTER_NAME'
     }
 
     stages {
+
         stage('Clean Workspace') {
-            steps { cleanWs() }
+            steps {
+                cleanWs()
+            }
         }
 
-        stage('Checkout from Git') {
+        stage('Checkout Code') {
             steps {
-                git branch: 'master', url: 'https://github.com/sandeepallakonda/DevOps-Project-Swiggy-sandeep.git'
+                git branch: 'master',
+                    url: 'https://github.com/sandeepallakonda/DevOps-Project-Swiggy-sandeep.git'
             }
         }
 
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv('sonar-server') {
-                    sh '''
-                        $SCANNER_HOME/bin/sonar-scanner \
-                          -Dsonar.projectKey=Swiggy \
-                          -Dsonar.projectName=Swiggy \
-                          -Dsonar.sources=.
-                    '''
+                    sh """
+                      ${SCANNER_HOME}/bin/sonar-scanner \
+                      -Dsonar.projectKey=Swiggy \
+                      -Dsonar.projectName=Swiggy \
+                      -Dsonar.sources=.
+                    """
                 }
             }
         }
 
         stage('Quality Gate') {
             steps {
-                script {
-                    timeout(time: 2, unit: 'MINUTES') {
-                        waitForQualityGate abortPipeline: true
-                    }
+                timeout(time: 2, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
                 }
             }
         }
 
         stage('Install Dependencies') {
-            steps { sh "npm install" }
+            steps {
+                sh 'npm install'
+            }
         }
 
         stage('Trivy Filesystem Scan') {
             steps {
-                sh "trivy fs . --exit-code 0 --severity HIGH,CRITICAL -f table -o trivy-fs-report.txt"
+                sh '''
+                  trivy fs . \
+                  --severity HIGH,CRITICAL \
+                  --exit-code 0 \
+                  -f table \
+                  -o trivy-fs-report.txt
+                '''
                 archiveArtifacts artifacts: 'trivy-fs-report.txt', allowEmptyArchive: true
             }
         }
 
         stage('Docker Build & Push') {
             steps {
-                script {
-                    withDockerRegistry(credentialsId: 'docker-creds', toolName: 'docker') {
-                        sh """
-                          docker build -t swiggy .
-                          docker tag swiggy sandeepallakonda/swiggy:latest
-                          docker push sandeepallakonda/swiggy:latest
-                        """
-                    }
+                withDockerRegistry(credentialsId: 'docker-creds', toolName: 'docker') {
+                    sh """
+                      docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                      docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                    """
                 }
             }
         }
 
         stage('Trivy Image Scan') {
             steps {
-                sh "trivy image sandeepallakonda/swiggy:latest --exit-code 0 --severity HIGH,CRITICAL -f table -o trivy-image-report.txt"
+                sh """
+                  trivy image ${IMAGE_NAME}:${IMAGE_TAG} \
+                  --severity HIGH,CRITICAL \
+                  --exit-code 0 \
+                  -f table \
+                  -o trivy-image-report.txt
+                """
                 archiveArtifacts artifacts: 'trivy-image-report.txt', allowEmptyArchive: true
             }
         }
 
         stage('Deploy to EKS') {
             steps {
-                script {
-                    withKubeConfig(caCertificate: '', clusterName: '', contextName: '', credentialsId: 'k8s', namespace: '', restrictKubeConfigAccess: false, serverUrl: '') {
-                        sh '''
-                          kubectl apply -f deployment.yaml
-                          kubectl apply -f service.yaml
-                          kubectl get pods -l app=swiggy
-                          kubectl get svc swiggy-service
-                        '''
-                    }
-                }
-            }
-        }
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-eks-creds'
+                ]]) {
+                    sh '''
+                      echo "Generating kubeconfig dynamically..."
+                      aws eks update-kubeconfig \
+                        --region $AWS_REGION \
+                        --name $EKS_CLUSTER
 
-        stage('Deploy to Container') {
-            steps {
-                sh '''
-                  docker rm -f swiggy || true
-                  docker run -d --name swiggy -p 3000:3000 sandeepallakonda/swiggy:latest
-                '''
+                      echo "Validating EKS connectivity..."
+                      kubectl get nodes
+
+                      echo "Deploying application to EKS..."
+                      kubectl apply -f deployment.yaml
+                      kubectl apply -f service.yaml
+
+                      kubectl get pods
+                      kubectl get svc
+                    '''
+                }
             }
         }
     }
 
     post {
-        always { echo "Pipeline execution completed!" }
-        failure { echo "Pipeline failed. Check logs for details." }
-        success { echo "Swiggy App deployed successfully! 🎉" }
+        success {
+            echo 'Swiggy application deployed successfully to AWS EKS'
+        }
+        failure {
+            echo 'Pipeline failed. Please review Jenkins logs.'
+        }
+        always {
+            echo 'Pipeline execution completed'
+        }
     }
 }
