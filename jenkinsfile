@@ -8,11 +8,11 @@ pipeline {
 
     environment {
         SCANNER_HOME = tool 'sonar-scanner'
-        IMAGE_NAME   = 'sandeepallakonda/swiggy'
+        IMAGE_NAME   = 'sriram084/swiggy'
         IMAGE_TAG    = 'latest'
 
         AWS_REGION   = 'us-east-1'
-        EKS_CLUSTER  = 'YOUR_EKS_CLUSTER_NAME'
+        EKS_CLUSTER  = 'swiggy-eks-cluster'
     }
 
     stages {
@@ -26,7 +26,7 @@ pipeline {
         stage('Checkout Code') {
             steps {
                 git branch: 'master',
-                    url: 'https://github.com/sandeepallakonda/DevOps-Project-Swiggy-sandeep.git'
+                    url: 'https://github.com/sriramch163/swiggy'
             }
         }
 
